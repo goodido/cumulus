@@ -10,6 +10,33 @@ const StepFunctions = require('./StepFunctions');
  * Step Function for a specific execution.
 */
 class SfnStep {
+  /**
+   * Parse the step message.
+   *
+   * Merge possible keys from the CMA in the input and handle remote message
+   * retrieval if necessary.
+   *
+   * @param {Object} stepMessage - Details for the step
+   * @param {Object} stepMessage.input - Object containing input to the step
+   * @param {string} [stepName] - Name for the step being parsed. Optional.
+   * @returns {Object} - Parsed step input object
+   */
+  static parseStepMessage(stepMessage, stepName) {
+    let parsedStepMessage = stepMessage;
+    if (stepMessage.cma) {
+      parsedStepMessage = { ...stepMessage, ...stepMessage.cma, ...stepMessage.cma.event };
+      delete parsedStepMessage.cma;
+      delete parsedStepMessage.event;
+    }
+
+    if (stepMessage.replace) {
+      // Message was too large and output was written to S3
+      log.info(`Retrieving ${stepName} output from ${JSON.stringify(stepMessage.replace)}`);
+      parsedStepMessage = pullStepFunctionEvent(stepMessage);
+    }
+    return parsedStepMessage;
+  }
+
   constructor() {
     this.taskExitedEvent = 'TaskStateExited';
     this.taskExitedDetailsKey = 'stateExitedEventDetails';
@@ -185,33 +212,6 @@ class SfnStep {
     const subStepExecutionDetails = scheduleEvent[this.eventDetailsKeys.scheduled];
     const stepInput = JSON.parse(subStepExecutionDetails.input);
     return this.parseStepMessage(stepInput, stepName);
-  }
-
-  /**
-   * Parse the step message.
-   *
-   * Merge possible keys from the CMA in the input and handle remote message
-   * retrieval if necessary.
-   *
-   * @param {Object} stepMessage - Details for the step
-   * @param {Object} stepMessage.input - Object containing input to the step
-   * @param {string} [stepName] - Name for the step being parsed. Optional.
-   * @returns {Object} - Parsed step input object
-   */
-  parseStepMessage(stepMessage, stepName) {
-    let parsedStepMessage = stepMessage;
-    if (stepMessage.cma) {
-      parsedStepMessage = { ...stepMessage, ...stepMessage.cma, ...stepMessage.cma.event };
-      delete parsedStepMessage.cma;
-      delete parsedStepMessage.event;
-    }
-
-    if (stepMessage.replace) {
-      // Message was too large and output was written to S3
-      log.info(`Retrieving ${stepName} output from ${JSON.stringify(stepMessage.replace)}`);
-      parsedStepMessage = pullStepFunctionEvent(stepMessage);
-    }
-    return parsedStepMessage;
   }
 
   /**

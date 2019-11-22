@@ -15,7 +15,7 @@ const {
   getMessageExecutionArn,
   getMessageGranules
 } = require('@cumulus/common/message');
-const { ActivityStep, LambdaStep } = require('@cumulus/common/sfnStep');
+const { SfnStep } = require('@cumulus/common/sfnStep');
 const StepFunctions = require('@cumulus/common/StepFunctions');
 
 const Execution = require('../models/executions');
@@ -232,36 +232,40 @@ async function publishReportSnsMessages(eventMessage, isTerminalStatus, isFailed
  */
 async function getFailedExecutionMessage(inputMessage) {
   const executionArn = getMessageExecutionArn(inputMessage);
-  let exception;
 
-  try {
-    const activityStep = new ActivityStep();
-    const lambdaStep = new LambdaStep();
+  const { events } = await StepFunctions.getExecutionHistory({ executionArn });
 
-    const { events, failedStepId, failedStepDetails } = (
-      await lambdaStep.getLastFailedStepEvent(executionArn)
-      || await activityStep.getLastFailedStepEvent(executionArn)
-    );
-    exception = failedStepDetails;
+  const stepFailedEvents = events.filter(
+    (event) => ['LambdaFunctionFailed', 'ActivityFailed'].includes(event.type)
+  );
 
-    const failedStepOutput = (
-      await lambdaStep.getLastFailedStepOutput(events, executionArn, failedStepId)
-      || await activityStep.getLastFailedStepOutput(events, executionArn, failedStepId)
-    );
+  // NOTE: As written, it is assuming that there will always be a failure event
+  const lastStepFailedEvent = stepFailedEvents[stepFailedEvents.length - 1];
 
-    return failedStepOutput;
-  } catch (err) {
+  const failedStepExitedEvent = events.find(
+    (event) =>
+      event.type === 'TaskStateExited'
+        && event.previousEventId === lastStepFailedEvent.id
+  );
+
+  if (!failedStepExitedEvent) {
     log.info(
       `Could not retrieve output from last failed step in execution ${executionArn}, falling back to execution input`,
-      'Error:', err
+      'Error:', new Error(`Could not find TaskStateExited event after step ID ${lastStepFailedEvent.id} for execution ${executionArn}`)
     );
     // If input from the failed step cannot be retrieved, then fall back to execution
     // input.
-    return {
-      ...inputMessage,
-      exception
-    };
+
+    const exception = lastStepFailedEvent.lambdaFunctionFailedEventDetails
+      || lastStepFailedEvent.activityFailedEventDetails;
+
+    return { ...inputMessage, exception };
   }
+
+  return SfnStep.parseStepMessage(
+    JSON.parse(failedStepExitedEvent.stateExitedEventDetails.output),
+    failedStepExitedEvent.failedEventDetails.resource
+  );
 }
 
 /**
