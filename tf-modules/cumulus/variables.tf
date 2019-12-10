@@ -451,3 +451,13 @@ variable "non_complete_execution_payload_timeout" {
   type    = number
   default = 30
 }
+
+variable "ingest_logs_to_elk" {
+  type = bool
+  default = false
+}
+
+variable "additional_log_groups_to_elk" {
+  type = map(string)
+  default = {}
+}
