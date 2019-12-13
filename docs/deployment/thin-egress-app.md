@@ -6,10 +6,13 @@ hide_title: true
 
 # Using the Thin Egress App for Cumulus distribution
 
-The [Thin Egress App](https://github.com/asfadmin/thin-egress-app) ("TEA") is
-deployed using [Terraform](https://terraform.io) modules. This document assumes
-that you have already followed [these instructions](./components) to to use
-Terraform with your deployment.
+The [Thin Egress App (TEA)](https://github.com/asfadmin/thin-egress-app) is an app running in Lambda that allows retrieving data from S3 using temporary links and provides URS integration.
+
+Note: If you are using the `cumulus` module, you will not need the information on this page, as Cumulus packages TEA within its `distribution` tf-module, which is pre-configured and included in our releases as a submodule of the `cumulus` module. However, if you are using individual Cumulus modules in your own Terraform configuration, or wish to configure TEA on your own, the information below is important to set up distribution.
+
+## Thin Egress App deployment
+
+TEA is deployed using [Terraform](https://terraform.io) modules. Refer to [these instructions](./components) for guidance on how to integrate new components with your deployment.
 
 The TEA module provides [these instructions](https://github.com/asfadmin/thin-egress-app/blob/devel/NGAP-DEPLOY-README.MD)
 showing how to add it to your deployment. Below are some Cumulus-specific tips:
@@ -22,7 +25,7 @@ serve. Documentation of the file format is available [here](https://github.com/a
 A simple config, which would use the same URL scheme that we are using now,
 would look something like this:
 
-**bucket_map.yaml**
+**bucket_map.yaml:**
 
 ```yaml
 MAP:
@@ -48,7 +51,7 @@ password is stored as `EARTHDATA_CLIENT_PASSWORD` in `app/.env`.
 This is pretty confusing, so an example should help. Let's say that we're using
 this `.env` file:
 
-**app/.env**
+**app/.env:**
 
 ```shell
 EARTHDATA_CLIENT_ID=my-client-id
@@ -98,8 +101,7 @@ tea_api_endpoint = https://abc123.execute-api.us-east-1.amazonaws.com/DEV/
 tea_urs_redirect_uri = https://abc123.execute-api.us-east-1.amazonaws.com/DEV/login
 ```
 
-Set `api_distribution_url` in your `app/config.yml` to the value of
-`tea_api_endpoint`.
+Pass `api_distribution_url` to your `archive` module's `distribution_url` var.
 
 You will also need to configure the `tea_urs_redirect_uri` value as a Redirect
 URI in your app's URS configuration.

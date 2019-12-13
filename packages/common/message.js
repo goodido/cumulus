@@ -6,9 +6,8 @@ const uuidv4 = require('uuid/v4');
 
 const { constructCollectionId } = require('./collection-config-store');
 const { isNil } = require('./util');
-const { getExecutionArn } = require('./aws');
-
 const {
+  getExecutionArn,
   getS3Object,
   parseS3Uri
 } = require('./aws');
@@ -24,14 +23,18 @@ const createExecutionName = () => uuidv4();
  * @returns {Object}
  */
 const buildCumulusMeta = ({
+  asyncOperationId,
+  parentExecutionArn,
   queueName,
-  parentExecutionArn
+  stateMachine
 }) => {
   const cumulusMeta = {
     execution_name: createExecutionName(),
-    queueName
+    queueName,
+    state_machine: stateMachine
   };
   if (parentExecutionArn) cumulusMeta.parentExecutionArn = parentExecutionArn;
+  if (asyncOperationId) cumulusMeta.asyncOperationId = asyncOperationId;
   return cumulusMeta;
 };
 
@@ -45,9 +48,12 @@ const buildCumulusMeta = ({
  */
 const buildMeta = ({
   collection,
-  provider
+  provider,
+  workflowName
 }) => {
-  const meta = {};
+  const meta = {
+    workflow_name: workflowName
+  };
   if (collection) {
     meta.collection = collection;
   }
@@ -67,6 +73,7 @@ const buildMeta = ({
  * @param {string} params.queueName - SQS queue name
  * @param {Object} params.messageTemplate - Message template for the workflow
  * @param {Object} params.payload - Payload for the workflow
+ * @param {Object} params.workflow - workflow name & arn object
  * @param {Object} params.customCumulusMeta - Custom data for message.cumulus_meta
  * @param {Object} params.customMeta - Custom data for message.meta
  *
@@ -77,19 +84,24 @@ function buildQueueMessageFromTemplate({
   collection,
   parentExecutionArn,
   queueName,
+  asyncOperationId,
   messageTemplate,
   payload,
+  workflow,
   customCumulusMeta = {},
   customMeta = {}
 }) {
   const cumulusMeta = buildCumulusMeta({
+    asyncOperationId,
     parentExecutionArn,
-    queueName
+    queueName,
+    stateMachine: workflow.arn
   });
 
   const meta = buildMeta({
+    collection,
     provider,
-    collection
+    workflowName: workflow.name
   });
 
   const message = {
@@ -146,11 +158,10 @@ const getMessageExecutionName = (message) => {
  * Get granules from execution message.
  *
  * @param {Object} message - An execution message
- * @returns {Array<Object>} - An array of granule objects
+ * @returns {Array<Object>|undefined} - An array of granule objects, or
+ *   undefined if `message.payload.granules` is not set
  */
-const getMessageGranules = (message) =>
-  get(message, 'payload.granules')
-  || get(message, 'meta.input_granules');
+const getMessageGranules = (message) => get(message, 'payload.granules');
 
 /**
  * Get the state machine ARN from a workflow message.
@@ -173,18 +184,14 @@ const getMessageStateMachineArn = (message) => {
  * @returns {null|string} - A state machine execution ARN
  */
 const getMessageExecutionArn = (message) => {
-  let stateMachineArn;
-  let executionName;
   try {
-    stateMachineArn = getMessageStateMachineArn(message);
-    executionName = getMessageExecutionName(message);
+    return getExecutionArn(
+      getMessageStateMachineArn(message),
+      getMessageExecutionName(message)
+    );
   } catch (err) {
     return null;
   }
-  return getExecutionArn(
-    stateMachineArn,
-    executionName
-  );
 };
 
 /**

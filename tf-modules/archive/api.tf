@@ -24,6 +24,7 @@ resource "aws_lambda_function" "api" {
       AsyncOperationTaskDefinition = aws_ecs_task_definition.async_operation.arn
       AsyncOperationsTable         = var.dynamo_tables.async_operations.name
       BulkDeleteLambda             = aws_lambda_function.bulk_delete.arn
+      BulkOperationLambda          = aws_lambda_function.bulk_operation.arn
       CMR_ENVIRONMENT              = var.cmr_environment
       CollectionsTable             = var.dynamo_tables.collections.name
       EARTHDATA_BASE_URL           = "${replace(var.urs_url, "//*$/", "/")}" # Makes sure there's one and only one trailing slash
@@ -37,13 +38,13 @@ resource "aws_lambda_function" "api" {
       ExecutionsTable              = var.dynamo_tables.executions.name
       GranulesTable                = var.dynamo_tables.granules.name
       IndexFromDatabaseLambda      = aws_lambda_function.index_from_database.arn
+      KinesisFallbackTopicArn      = var.kinesis_fallback_topic_arn
       KinesisInboundEventLogger    = var.kinesis_inbound_event_logger_lambda_function_arn
       OAUTH_PROVIDER               = var.oauth_provider
       PdrsTable                    = var.dynamo_tables.pdrs.name
       ProvidersTable               = var.dynamo_tables.providers.name
       RulesTable                   = var.dynamo_tables.rules.name
       oauth_user_group             = var.oauth_user_group
-      STSCredentialsLambda         = var.sts_credentials_lambda
       TOKEN_REDIRECT_ENDPOINT      = local.api_redirect_uri
       TOKEN_SECRET                 = var.token_secret
       UsersTable                   = var.dynamo_tables.users.name
@@ -60,23 +61,58 @@ resource "aws_lambda_function" "api" {
       launchpad_api                = var.launchpad_api
       launchpad_certificate        = var.launchpad_certificate
       launchpad_passphrase         = jsondecode(data.aws_lambda_invocation.custom_bootstrap.result).Data.LaunchpadPassphrase
+      ManualConsumerLambda         = var.manual_consumer_function_arn
       messageConsumer              = var.message_consumer_function_arn
       stackName                    = var.prefix
       system_bucket                = var.system_bucket
       public_buckets               = join(",", var.public_buckets)
       protected_buckets            = join(",", var.protected_buckets)
+      ENTITY_ID                    = var.saml_entity_id
+      ASSERT_ENDPOINT              = var.saml_assertion_consumer_service
+      IDP_LOGIN                    = var.saml_idp_login
+      LAUNCHPAD_METADATA_PATH      = var.saml_launchpad_metadata_path
+      METRICS_ES_HOST              = var.metrics_es_host
+      METRICS_ES_USER              = var.metrics_es_username
+      METRICS_ES_PASS              = var.metrics_es_password
     }
   }
   memory_size = 756
   tags        = merge(local.default_tags, { Project = var.prefix })
+
   vpc_config {
     subnet_ids         = var.lambda_subnet_ids
-    security_group_ids = [aws_security_group.no_ingress_all_egress.id]
+    security_group_ids = var.lambda_subnet_ids == null ? null : [aws_security_group.no_ingress_all_egress[0].id, var.elasticsearch_security_group_id]
+  }
+}
+
+data "aws_iam_policy_document" "private_api_policy_document" {
+  statement {
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = [ "*" ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceVpc"
+      values = [var.vpc_id]
+    }
   }
 }
 
 resource "aws_api_gateway_rest_api" "api" {
   name = "${var.prefix}-archive"
+
+  lifecycle {
+    ignore_changes = [policy]
+  }
+
+  policy = var.private_archive_api_gateway ? data.aws_iam_policy_document.private_api_policy_document.json : null
+
+  endpoint_configuration {
+    types = var.private_archive_api_gateway ? ["PRIVATE"] : ["EDGE"]
+  }
 }
 
 resource "aws_lambda_permission" "api_endpoints_lambda_permission" {

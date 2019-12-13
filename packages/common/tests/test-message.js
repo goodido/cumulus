@@ -3,47 +3,68 @@
 const test = require('ava');
 const rewire = require('rewire');
 const message = rewire('../message');
+const {
+  buildCumulusMeta,
+  buildQueueMessageFromTemplate,
+  getCollectionIdFromMessage,
+  getMaximumExecutions,
+  getMessageExecutionArn,
+  getMessageExecutionName,
+  getMessageFromTemplate,
+  getMessageGranules,
+  getMessageStateMachineArn,
+  getQueueNameByUrl
+} = message;
 
-const { getExecutionArn } = require('../aws');
 const { constructCollectionId } = require('../collection-config-store');
 const { randomId, randomString } = require('../test-utils');
 
-const buildCumulusMeta = message.__get__('buildCumulusMeta');
-const buildQueueMessageFromTemplate = message.__get__('buildQueueMessageFromTemplate');
-const getMessageExecutionName = message.__get__('getMessageExecutionName');
-const getMessageStateMachineArn = message.__get__('getMessageStateMachineArn');
-const getMessageExecutionArn = message.__get__('getMessageExecutionArn');
-const getQueueNameByUrl = message.__get__('getQueueNameByUrl');
-const getMessageFromTemplate = message.__get__('getMessageFromTemplate');
-const getMaximumExecutions = message.__get__('getMaximumExecutions');
-const getCollectionIdFromMessage = message.__get__('getCollectionIdFromMessage');
-const getMessageGranules = message.__get__('getMessageGranules');
-
-const fakeExecutionName = randomString();
-message.__set__('createExecutionName', () => fakeExecutionName);
+const fakeId = randomString();
+message.__set__('uuidv4', () => fakeId);
 
 test('buildCumulusMeta returns expected object', (t) => {
+  const stateMachine = randomId('states');
   const queueName = randomId('queue');
+  const asyncOperationId = randomString();
 
   let cumulusMeta = buildCumulusMeta({
+    stateMachine,
     queueName
   });
 
   t.deepEqual(cumulusMeta, {
+    state_machine: stateMachine,
     queueName,
-    execution_name: fakeExecutionName
+    execution_name: fakeId
   });
 
   const parentExecutionArn = randomId('parentArn');
   cumulusMeta = buildCumulusMeta({
+    stateMachine,
     queueName,
     parentExecutionArn
   });
 
   t.deepEqual(cumulusMeta, {
+    state_machine: stateMachine,
     queueName,
     parentExecutionArn,
-    execution_name: fakeExecutionName
+    execution_name: fakeId
+  });
+
+  cumulusMeta = buildCumulusMeta({
+    asyncOperationId,
+    parentExecutionArn,
+    queueName,
+    stateMachine
+  });
+
+  t.deepEqual(cumulusMeta, {
+    asyncOperationId,
+    execution_name: fakeId,
+    state_machine: stateMachine,
+    parentExecutionArn,
+    queueName
   });
 });
 
@@ -62,19 +83,23 @@ test('getMessageStateMachineArn throws error if cumulus_meta.state_machine is mi
 });
 
 test('getMessageExecutionArn returns correct execution ARN for valid message', (t) => {
-  const stateMachineArn = randomString();
-  const executionName = randomString();
-  const executionArn = getMessageExecutionArn({
+  const cumulusMessage = {
     cumulus_meta: {
-      state_machine: stateMachineArn,
-      execution_name: executionName
+      state_machine: 'arn:aws:states:us-east-1:111122223333:stateMachine:HelloWorld-StateMachine',
+      execution_name: 'my-execution-name'
     }
-  });
-  t.is(executionArn, getExecutionArn(stateMachineArn, executionName));
+  };
+
+  const executionArn = getMessageExecutionArn(cumulusMessage);
+
+  t.is(
+    executionArn,
+    'arn:aws:states:us-east-1:111122223333:execution:HelloWorld-StateMachine:my-execution-name'
+  );
 });
 
-test('getMessageExecutionArn returns null for invalid message', (t) => {
-  const executionArn = getMessageExecutionArn();
+test('getMessageExecutionArn returns null for an invalid message', (t) => {
+  const executionArn = getMessageExecutionArn({});
   t.is(executionArn, null);
 });
 
@@ -155,30 +180,17 @@ test('getMessageGranules returns granules from payload.granules', (t) => {
   t.deepEqual(result, granules);
 });
 
-test('getMessageGranules returns granules from meta.input_granules', (t) => {
-  const granules = [{
-    granuleId: randomId('granule')
-  }];
-  const testMessage = {
-    meta: {
-      input_granules: granules
-    }
-  };
-  const result = getMessageGranules(testMessage);
-  t.deepEqual(result, granules);
-});
-
 test('getMessageGranules returns nothing when granules are absent from message', (t) => {
   const testMessage = {};
   const result = getMessageGranules(testMessage);
   t.is(result, undefined);
 });
 
-test('getMessageTemplate throws error if invalid S3 URI is provided', async (t) => {
+test('getMessageFromTemplate throws error if invalid S3 URI is provided', async (t) => {
   await t.throwsAsync(() => getMessageFromTemplate('fake-uri'));
 });
 
-test('getMessageTemplate throws error if non-existent S3 URI is provided', async (t) => {
+test('getMessageFromTemplate throws error if non-existent S3 URI is provided', async (t) => {
   await t.throwsAsync(() => getMessageFromTemplate('s3://some-bucket/some-key'));
 });
 
@@ -186,13 +198,15 @@ test('buildQueueMessageFromTemplate does not overwrite contents from message tem
   const messageTemplate = {
     foo: 'bar',
     meta: {
-      workflows: {
-        workflow1: 'workflow1Template'
-      }
+      template: 's3://bucket/template.json'
     },
     cumulus_meta: {
       message_source: 'sfn'
     }
+  };
+  const workflow = {
+    name: randomId('workflow'),
+    arn: randomId('arn:aws:states:wf')
   };
   const provider = randomId('provider');
   const collection = randomId('collection');
@@ -204,7 +218,8 @@ test('buildQueueMessageFromTemplate does not overwrite contents from message tem
     collection,
     queueName,
     messageTemplate,
-    payload
+    payload,
+    workflow
   });
 
   const expectedMessage = {
@@ -212,14 +227,14 @@ test('buildQueueMessageFromTemplate does not overwrite contents from message tem
     meta: {
       provider,
       collection,
-      workflows: {
-        workflow1: 'workflow1Template'
-      }
+      template: 's3://bucket/template.json',
+      workflow_name: workflow.name
     },
     cumulus_meta: {
       message_source: 'sfn',
-      execution_name: fakeExecutionName,
-      queueName
+      execution_name: fakeId,
+      queueName,
+      state_machine: workflow.arn
     },
     payload
   };
@@ -229,6 +244,10 @@ test('buildQueueMessageFromTemplate does not overwrite contents from message tem
 
 test('buildQueueMessageFromTemplate returns message with correct payload', (t) => {
   const messageTemplate = {};
+  const workflow = {
+    name: randomId('workflow'),
+    arn: randomId('arn:aws:states:wf')
+  };
   const provider = randomId('provider');
   const collection = randomId('collection');
   const queueName = randomId('queue');
@@ -246,17 +265,20 @@ test('buildQueueMessageFromTemplate returns message with correct payload', (t) =
     collection,
     queueName,
     messageTemplate,
-    payload
+    payload,
+    workflow
   });
 
   const expectedMessage = {
     meta: {
       provider,
-      collection
+      collection,
+      workflow_name: workflow.name
     },
     cumulus_meta: {
-      execution_name: fakeExecutionName,
-      queueName
+      execution_name: fakeId,
+      queueName,
+      state_machine: workflow.arn
     },
     payload: {
       foo: 'bar',
@@ -281,6 +303,10 @@ test('buildQueueMessageFromTemplate returns expected message with undefined coll
       provider // should not be overridden
     }
   };
+  const workflow = {
+    name: randomId('workflow'),
+    arn: randomId('arn:aws:states:wf')
+  };
   const queueName = randomId('queue');
   const payload = {};
 
@@ -289,17 +315,20 @@ test('buildQueueMessageFromTemplate returns expected message with undefined coll
     collection: undefined,
     queueName,
     messageTemplate,
-    payload
+    payload,
+    workflow
   });
 
   const expectedMessage = {
     meta: {
       provider,
-      collection
+      collection,
+      workflow_name: workflow.name
     },
     cumulus_meta: {
-      execution_name: fakeExecutionName,
-      queueName
+      execution_name: fakeId,
+      queueName,
+      state_machine: workflow.arn
     },
     payload
   };
@@ -314,6 +343,10 @@ test('buildQueueMessageFromTemplate returns expected message with defined collec
       collection: 'fake-collection' // should get overriden
     }
   };
+  const workflow = {
+    name: randomId('workflow'),
+    arn: randomId('arn:aws:states:wf')
+  };
   const provider = randomId('provider');
   const collection = randomId('collection');
   const queueName = randomId('queue');
@@ -324,17 +357,20 @@ test('buildQueueMessageFromTemplate returns expected message with defined collec
     collection,
     queueName,
     messageTemplate,
-    payload
+    payload,
+    workflow
   });
 
   const expectedMessage = {
     meta: {
       provider,
-      collection
+      collection,
+      workflow_name: workflow.name
     },
     cumulus_meta: {
-      execution_name: fakeExecutionName,
-      queueName
+      execution_name: fakeId,
+      queueName,
+      state_machine: workflow.arn
     },
     payload
   };
@@ -363,6 +399,10 @@ test('buildQueueMessageFromTemplate returns expected message with custom cumulus
       key: 'value'
     }
   };
+  const workflow = {
+    name: randomId('workflow'),
+    arn: randomId('arn:aws:states:wf')
+  };
   const payload = {};
 
   const actualMessage = buildQueueMessageFromTemplate({
@@ -372,7 +412,8 @@ test('buildQueueMessageFromTemplate returns expected message with custom cumulus
     messageTemplate,
     customCumulusMeta,
     customMeta,
-    payload
+    payload,
+    workflow
   });
 
   const expectedMessage = {
@@ -382,11 +423,13 @@ test('buildQueueMessageFromTemplate returns expected message with custom cumulus
       foo: 'bar',
       object: {
         key: 'value'
-      }
+      },
+      workflow_name: workflow.name
     },
     cumulus_meta: {
-      execution_name: fakeExecutionName,
+      execution_name: fakeId,
       queueName,
+      state_machine: workflow.arn,
       foo: 'bar',
       object: {
         key: 'value'
@@ -398,4 +441,4 @@ test('buildQueueMessageFromTemplate returns expected message with custom cumulus
   t.deepEqual(actualMessage, expectedMessage);
 });
 
-test.todo('getMessageTemplate throws error if message template body is not JSON');
+test.todo('getMessageFromTemplate throws error if message template body is not JSON');

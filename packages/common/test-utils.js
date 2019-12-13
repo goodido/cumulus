@@ -126,8 +126,7 @@ const localStackPorts = {
   cloudwatch: 4582,
   cloudwatchevents: 4582,
   cloudwatchlogs: 4586,
-  dynamodb: 4569,
-  dynamodbstreams: 4570,
+  dynamodb: 4564,
   es: 4571,
   firehose: 4573,
   iam: 4593,
@@ -289,7 +288,7 @@ exports.testAwsClient = testAwsClient;
  * @param {Object} t - an ava test
  * @param {string} schemaFilename - the filename of the schema
  * @param {Object} data - the object to be validated
- * @returns {boolean} - whether the object is valid or not
+ * @returns {Promise<boolean>} - whether the object is valid or not
  */
 async function validateJSON(t, schemaFilename, data) {
   const schemaName = path.basename(schemaFilename).split('.')[0];
@@ -327,7 +326,7 @@ exports.validateInput = validateInput;
  *
  * @param {Object} t - an ava test
  * @param {Object} data - the object to be validated
- * @returns {boolean} - whether the object is valid or not
+ * @returns {Promise<boolean>} - whether the object is valid or not
  */
 async function validateConfig(t, data) {
   return validateJSON(t, './schemas/config.json', data);
@@ -341,7 +340,7 @@ exports.validateConfig = validateConfig;
  *
  * @param {Object} t - an ava test
  * @param {Object} data - the object to be validated
- * @returns {boolean} - whether the object is valid or not
+ * @returns {Promise<boolean>} - whether the object is valid or not
  */
 async function validateOutput(t, data) {
   return validateJSON(t, './schemas/output.json', data);

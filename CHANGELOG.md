@@ -7,9 +7,191 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+**Please note**:
+
+- Your workflow tasks should use `cumulus-message-adapter-js` version 1.0.10+ to utilize new granule, parentArn, asyncOperationId, and stackName fields on the logs.
+- The `data-persistence` module no longer manages the creation of an Elasticsearch service-linked role for deploying Elasticsearch to a VPC. Follow the [deployment instructions on preparing your VPC](https://nasa.github.io/cumulus/docs/deployment/deployment-readme#vpc-subnets-and-security-group) for guidance on how to create the Elasticsearch service-linked role manually.
+- There is now a `distribution_api_gateway_stage` variable for the `tf-modules/cumulus` Terraform module that will be used as the API gateway stage name used for the distribution API (Thin Egress App)
+- Default value for the `urs_url` variable is now `https://uat.urs.earthdata.nasa.gov/` in the `tf-modules/cumulus` and `tf-modules/archive` Terraform modules. So deploying the `cumulus` module without a `urs_url` variable set will integrate your Cumulus deployment with the UAT URS environment.
+
+### Added
+
+- **CUMULUS-630**
+  - Added support for replaying Kinesis records on a stream into the Cumulus Kinesis workflow triggering mechanism, either all the records, or some time slice delimited by start and end timestamps.
+  - Added `/replays` endpoint for triggering replays to the operator API.
+  - Added `Replay Kinesis Messages` doc to Operator Docs.
+  - Added `manualConsumer` lambda function to consume a Kinesis stream. Used by the replay AsyncOperation.
+
+- **CUMULUS-1563**
+  - Added `custom_domain_name` variable to `tf-modules/data-persistence` module
+
+- **CUMULUS-1654**
+  - Added new helpers to `@cumulus/common/execution-history`:
+    - `getStepExitedEvent()` returns the `TaskStateExited` event in a workflow execution history after the given step completion/failure event
+    - `getTaskExitedEventOutput()` returns the output message for a `TaskStateExited` event in a workflow execution history
+
 ### BREAKING CHANGES
 
-- **CUMULUS-1396** - **Workflow steps at the beginning and end of a workflow using the `SfSnsReport` Lambda have now been deprecated (e.g. `StartStatus`, `StopStatus`) and should be removed from your workflow definitions**. These steps were used for publishing ingest notifications and have been replaced by an implementation using Cloudwatch events for Step Functions to trigger a Lambda that publishes ingest notifications. For further detail on how ingest notifications are published, see the notes below on **CUMULUS-1394**. For examples of how to update your workflow definitions, see our [example workflow definitions](https://github.com/nasa/cumulus/blob/master/example/workflows/).
+- **CUMULUS-1321**
+  - The `region` argument to the `cumulus` Terraform module has been removed
+
+### Changed
+
+- **CUMULUS-1578**
+  - Updates SAML launchpad configuration to authorize via configured userGroup.
+   [See the NASA specific documentation (protected)](https://wiki.earthdata.nasa.gov/display/CUMULUS/Cumulus+SAML+Launchpad+Integration)
+
+- **CUMULUS-1579**
+  - Elasticsearch list queries use `match` instead of `term`. `term` had been analyzing the terms and not supporting `-` in the field values.
+
+- **CUMULUS-1619**
+  - Adds 4 new keys to `@cumulus/logger` to display granules, parentArn, asyncOperationId, and stackName.
+  - Depends on `cumulus-message-adapter-js` version 1.0.10+. Cumulus tasks updated to use this version.
+
+- **CUMULUS-1654**
+  - Changed `@cumulus/common/SfnStep.parseStepMessage()` to a static class method
+
+- **CUMULUS-1641**
+  - Added `meta.retries` and `meta.visibilityTimeout` properties to sqs-type rule. To create sqs-type rule, you're required to configure a dead-letter queue on your queue.
+  - Added `sqsMessageRemover` lambda which removes the message from SQS queue upon successful workflow execution.
+  - Updated `sqsMessageConsumer` lambda to not delete message from SQS queue, and to retry the SQS message for configured number of times.
+
+### Removed
+
+- Removed `create_service_linked_role` variable from `tf-modules/data-persistence` module.
+
+### Fixed
+
+- **CUMULUS-1668** - Fixed a race condition where executions may not have been
+  added to the database correctly
+- **CUMULUS-1654** - Fixed issue with `publishReports` Lambda not including workflow execution error information for failed workflows with a single step
+- Fixed `tf-modules/cumulus` module so that the `urs_url` variable is passed on to its invocation of the `tf-modules/archive` module
+
+## [v1.16.0] - 2019-11-15
+
+### Added
+
+- **CUMULUS-1321**
+  - A `deploy_distribution_s3_credentials_endpoint` variable has been added to
+    the `cumulus` Terraform module. If true, the NGAP-backed S3 credentials
+    endpoint will be added to the Thin Egress App's API. Default: true
+
+- **CUMULUS-1544**
+  - Updated the `/granules/bulk` endpoint to correctly query Elasticsearch when
+  granule ids are not provided.
+
+- **CUMULUS-1580**
+  - Added `/granules/bulk` endpoint to `@cumulus/api` to perform bulk actions on granules given either a list of granule ids or an Elasticsearch query and the workflow to perform.
+
+### Changed
+
+- **CUMULUS-1561**
+  - Fix the way that we are handling Terraform provider version requirements
+  - Pass provider configs into child modules using the method that the
+    [Terraform documentation](https://www.terraform.io/docs/configuration/modules.html#providers-within-modules)
+    suggests
+  - Remove the `region` input variable from the `s3_access_test` Terraform module
+  - Remove the `aws_profile` and `aws_region` input variables from the
+    `s3-replicator` Terraform module
+
+- **CUMULUS-1639**
+  - Because of
+    [S3's Data Consistency Model](https://docs.aws.amazon.com/AmazonS3/latest/dev/Introduction.html#BasicsObjects),
+    there may be situations where a GET operation for an object can temporarily
+    return a `NoSuchKey` response even if that object _has_ been created. The
+    `@cumulus/common/aws.getS3Object()` function has been updated to support
+    retries if a `NoSuchKey` response is returned by S3. This behavior can be
+    enabled by passing a `retryOptions` object to that function. Supported
+    values for that object can be found here:
+    <https://github.com/tim-kos/node-retry#retryoperationoptions>
+
+### Removed
+
+- **CUMULUS-1559**
+  - `logToSharedDestination` has been migrated to the Terraform deployment as `log_api_gateway_to_cloudwatch` and will ONLY apply to egress lambdas.
+  Due to the differences in the Terraform deployment model, we cannot support a global log subscription toggle for a configurable subset of lambdas.
+  However, setting up your own log forwarding for a Lambda with Terraform is fairly simple, as you will only need to add SubscriptionFilters to your Terraform configuration, one per log group.
+  See [the Terraform documentation](https://www.terraform.io/docs/providers/aws/r/cloudwatch_log_subscription_filter.html) for details on how to do this.
+  An empty FilterPattern ("") will capture all logs in a group.
+
+## [v1.15.0] - 2019-11-04
+
+### BREAKING CHANGES
+
+- **CUMULUS-1644** - When a workflow execution begins or ends, the workflow
+  payload is parsed and any new or updated PDRs or granules referenced in that
+  workflow are stored to the Cumulus archive. The defined interface says that a
+  PDR in `payload.pdr` will be added to the archive, and any granules in
+  `payload.granules` will also be added to the archive. In previous releases,
+  PDRs found in `meta.pdr` and granules found in `meta.input_granules` were also
+  added to the archive. This caused unexpected behavior and has been removed.
+  Only PDRs from `payload.pdr` and granules from `payload.granules` will now be
+  added to the Cumulus archive.
+
+- **CUMULUS-1449** - Cumulus now uses a universal workflow template when
+  starting a workflow that contains general information specific to the
+  deployment, but not specific to the workflow. Workflow task configs must be
+  defined using AWS step function parameters. As part of this change,
+  `CumulusConfig` has been retired and task configs must now be defined under
+  the `cma.task_config` key in the Parameters section of a step function
+  definition.
+
+  **Migration instructions**:
+
+  NOTE: These instructions require the use of Cumulus Message Adapter v1.1.x+.
+  Please ensure you are using a compatible version before attempting to migrate
+  workflow configurations. When defining workflow steps, remove any
+  `CumulusConfig` section, as shown below:
+
+  ```yaml
+  ParsePdr:
+    CumulusConfig:
+      provider: '{$.meta.provider}'
+      bucket: '{$.meta.buckets.internal.name}'
+      stack: '{$.meta.stack}'
+  ```
+
+  Instead, use AWS Parameters to pass `task_config` for the task directly into
+  the Cumulus Message Adapter:
+
+  ```yaml
+  ParsePdr:
+    Parameters:
+      cma:
+        event.$: '$'
+        task_config:
+          provider: '{$.meta.provider}'
+          bucket: '{$.meta.buckets.internal.name}'
+          stack: '{$.meta.stack}'
+  ```
+
+  In this example, the `cma` key is used to pass parameters to the message
+  adapter. Using `task_config` in combination with `event.$: '$'` allows the
+  message adapter to process `task_config` as the `config` passed to the Cumulus
+  task. See `example/workflows/sips.yml` in the core repository for further
+  examples of how to set the Parameters.
+
+  Additionally, workflow configurations for the `QueueGranules` and `QueuePdrs`
+  tasks need to be updated:
+  - `queue-pdrs` config changes:
+    - `parsePdrMessageTemplateUri` replaced with `parsePdrWorkflow`, which is
+      the workflow name (i.e. top-level name in `config.yml`, e.g. 'ParsePdr').
+    - `internalBucket` and `stackName` configs now required to look up
+      configuration from the deployment. Brings the task config in line with
+      that of `queue-granules`.
+  - `queue-granules` config change: `ingestGranuleMessageTemplateUri` replaced
+    with `ingestGranuleWorkflow`, which is the workflow name (e.g.
+    'IngestGranule').
+
+- **CUMULUS-1396** - **Workflow steps at the beginning and end of a workflow
+  using the `SfSnsReport` Lambda have now been deprecated (e.g. `StartStatus`,
+  `StopStatus`) and should be removed from your workflow definitions**. These
+  steps were used for publishing ingest notifications and have been replaced by
+  an implementation using Cloudwatch events for Step Functions to trigger a
+  Lambda that publishes ingest notifications. For further detail on how ingest
+  notifications are published, see the notes below on **CUMULUS-1394**. For
+  examples of how to update your workflow definitions, see our
+  [example workflow definitions](https://github.com/nasa/cumulus/blob/master/example/workflows/).
 
 - **CUMULUS-1470**
   - Remove Cumulus-defined ECS service autoscaling, allowing integrators to
@@ -18,7 +200,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
     `AWS::ApplicationAutoScaling::ScalableTarget`,
     `AWS::ApplicationAutoScaling::ScalingPolicy`, and `AWS::CloudWatch::Alarm`
     resources should be defined in a kes overrides file. See
-    [example/app/cloudformation.template.yml](./example/app/cloudformation.template.yml)
+    [this example](https://github.com/nasa/cumulus/blob/release-1.15.x/example/overrides/app/cloudformation.template.yml)
     for an example.
   - The following config parameters are no longer used:
     - ecs.services.\<NAME\>.minTasks
@@ -31,6 +213,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **CUMULUS-1100**
+  - Added 30-day retention properties to all log groups that were missing those policies.
+
 - **CUMULUS-1396**
   - Added `@cumulus/common/sfnStep`:
     - `LambdaStep` - A class for retrieving and parsing input and output to Lambda steps in AWS Step Functions
@@ -40,19 +225,71 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   - Added `GET /token` endpoint for SAML authorization when cumulus is protected by Launchpad.
     This lets a user retieve a token by hand that can be presented to the API.
 
+- **CUMULUS-1625**
+  - Added `sf_start_rate` variable to the `ingest` Terraform module, equivalent to `sqs_consumer_rate` in the old model, but will not be automatically applied to custom queues as that was.
+
 - **CUMULUS-1513**
   - Added `sqs`-type rule support in the Cumulus API `@cumulus/api`
   - Added `sqsMessageConsumer` lambda which processes messages from the SQS queues configured in the `sqs` rules.
 
 ### Changed
 
+- **CUMULUS-1639**
+  - Because of
+    [S3's Data Consistency Model](https://docs.aws.amazon.com/AmazonS3/latest/dev/Introduction.html#BasicsObjects),
+    there may be situations where a GET operation for an object can temporarily
+    return a `NoSuchKey` response even if that object _has_ been created. The
+    `@cumulus/common/aws.getS3Object()` function will now retry up to 10 times
+    if a `NoSuchKey` response is returned by S3. This can behavior can be
+    overridden by passing `{ retries: 0 }` as the `retryOptions` argument.
+
+- **CUMULUS-1449**
+  - `queue-pdrs` & `queue-granules` config changes. Details in breaking changes section.
+  - Cumulus now uses a universal workflow template when starting workflow that contains general information specific to the deployment, but not specific to the workflow.
+  - Changed the way workflow configs are defined, from `CumulusConfig` to a `task_config` AWS Parameter.
+
+- **CUMULUS-1452**
+  - Changed the default ECS docker storage drive to `devicemapper`
+
 - **CUMULUS-1453**
   - Removed config schema for `@cumulus/sf-sns-report` task
   - Updated `@cumulus/sf-sns-report` to always assume that it is running as an intermediate step in a workflow, not as the first or last step
 
-### Fixed
+### Removed
+
+- **CUMULUS-1449**
+  - Retired `CumulusConfig` as part of step function definitions, as this is an artifact of the way Kes parses workflow definitions that was not possible to migrate to Terraform. Use AWS Parameters and the `task_config` key instead. See change note above.
+  - Removed individual workflow templates.
+
 - **CUMULUS-1620** - Fixed bug where `message_adapter_version` does not correctly inject the CMA
+
 - **CUMULUS-1396** - Updated `@cumulus/common/StepFunctions.getExecutionHistory()` to recursively fetch execution history when `nextToken` is returned in response
+
+- **CUMULUS-1571** - Updated `@cumulus/common/DynamoDb.get()` to throw any errors encountered when trying to get a record and the record does exist
+
+- **CUMULUS-1452**
+  - Updated the EC2 initialization scripts to use full volume size for docker storage
+  - Changed the default ECS docker storage drive to `devicemapper`
+
+## [v1.14.4] - 2019-10-28
+
+### Fixed
+
+- **CUMULUS-1632** - Pinned `aws-elasticsearch-connector` package in `@cumulus/api` to version `8.1.3`, since `8.2.0` includes breaking changes
+
+## [v1.14.3] - 2019-10-18
+
+### Fixed
+
+- **CUMULUS-1620** - Fixed bug where `message_adapter_version` does not correctly inject the CMA
+
+- **CUMULUS-1572** - A granule is now included in discovery results even when
+none of its files has a matching file type in the associated collection
+configuration. Previously, if all files for a granule were unmatched by a file
+type configuration, the granule was excluded from the discovery results.
+Further, added support for a `boolean` property
+`ignoreFilesConfigForDiscovery`, which controls how a granule's files are
+filtered at discovery time.
 
 ## [v1.14.2] - 2019-10-08
 
@@ -146,6 +383,8 @@ SfSnsReport:
 - **CUMULUS-1375**
   - Migrate Cumulus from deprecated Elasticsearch JS client to new, supported one in `@cumulus/api`
 
+- **CUMULUS-1485** Update `@cumulus/cmr-client` to return error message from CMR for validation failures.
+
 - **CUMULUS-1394**
   - Renamed `Execution.generateDocFromPayload()` to `Execution.generateRecord()` on executions model. The method generates an execution database record from a Cumulus execution message.
 
@@ -165,8 +404,6 @@ SfSnsReport:
 
 - **CUMULUS-1456**
   - `@cumulus/api` endpoints default error handler uses `boom` package to format errors, which is consistent with other API endpoint errors.
-
-- **CUMULUS-1485** Update `@cumulus/cmr-client` to return error message from CMR for validation failures.
 
 ### Fixed
 
@@ -1529,7 +1766,11 @@ We may need to update the api documentation to reflect this.
 
 ## [v1.0.0] - 2018-02-23
 
-[Unreleased]: https://github.com/nasa/cumulus/compare/v1.14.2...HEAD
+[Unreleased]: https://github.com/nasa/cumulus/compare/v1.16.0...HEAD
+[v1.16.0]: https://github.com/nasa/cumulus/compare/v1.15.0...v1.16.0
+[v1.15.0]: https://github.com/nasa/cumulus/compare/v1.14.4...v1.15.0
+[v1.14.4]: https://github.com/nasa/cumulus/compare/v1.14.3...v1.14.4
+[v1.14.3]: https://github.com/nasa/cumulus/compare/v1.14.2...v1.14.3
 [v1.14.2]: https://github.com/nasa/cumulus/compare/v1.14.1...v1.14.2
 [v1.14.1]: https://github.com/nasa/cumulus/compare/v1.14.0...v1.14.1
 [v1.14.0]: https://github.com/nasa/cumulus/compare/v1.13.5...v1.14.0

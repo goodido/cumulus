@@ -1,6 +1,7 @@
 resource "aws_sqs_queue" "db_indexer_dead_letter_queue" {
   name                       = "${var.prefix}-dbIndexerDeadLetterQueue"
   receive_wait_time_seconds  = 20
+  message_retention_seconds  = 1209600
   visibility_timeout_seconds = 60
   tags                       = local.default_tags
 }
@@ -27,9 +28,10 @@ resource "aws_lambda_function" "db_indexer" {
     }
   }
   tags = merge(local.default_tags, { Project = var.prefix })
+
   vpc_config {
     subnet_ids         = var.lambda_subnet_ids
-    security_group_ids = [aws_security_group.no_ingress_all_egress.id]
+    security_group_ids = var.lambda_subnet_ids == null ? null : [aws_security_group.no_ingress_all_egress[0].id, var.elasticsearch_security_group_id]
   }
 }
 

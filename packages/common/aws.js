@@ -5,7 +5,6 @@ const fs = require('fs');
 const { JSONPath } = require('jsonpath-plus');
 const isObject = require('lodash.isobject');
 const isString = require('lodash.isstring');
-const cloneDeep = require('lodash.clonedeep');
 const pMap = require('p-map');
 const pRetry = require('p-retry');
 const pump = require('pump');
@@ -46,7 +45,7 @@ const improveStackTrace = (fn) =>
       return await fn(...args);
     } catch (err) {
       setErrorStack(err, tracerError.stack);
-      err.message = `${err.message}; Function params: ${args}`;
+      err.message = `${err.message}; Function params: ${JSON.stringify(args, null, 2)}`;
       throw err;
     }
   };
@@ -123,6 +122,7 @@ const awsClient = (Service, version = null) => {
 exports.apigateway = awsClient(AWS.APIGateway, '2015-07-09');
 exports.ecs = awsClient(AWS.ECS, '2014-11-13');
 exports.s3 = awsClient(AWS.S3, '2006-03-01');
+exports.kinesis = awsClient(AWS.Kinesis, '2013-12-02');
 exports.lambda = awsClient(AWS.Lambda, '2015-03-31');
 exports.sqs = awsClient(AWS.SQS, '2012-11-05');
 exports.cloudwatchevents = awsClient(AWS.CloudWatchEvents, '2014-02-03');
@@ -358,10 +358,28 @@ exports.s3PutObjectTagging = improveStackTrace(
 *
 * @param {string} Bucket - name of bucket
 * @param {string} Key - key for object (filepath + filename)
+* @param {Object} retryOptions - options to control retry behavior when an
+*   object does not exist. See https://github.com/tim-kos/node-retry#retryoperationoptions
+*   By default, retries will not be performed
 * @returns {Promise} - returns response from `S3.getObject` as a promise
 **/
 exports.getS3Object = improveStackTrace(
-  (Bucket, Key) => exports.s3().getObject({ Bucket, Key }).promise()
+  (Bucket, Key, retryOptions = { retries: 0 }) =>
+    pRetry(
+      async () => {
+        try {
+          return await exports.s3().getObject({ Bucket, Key }).promise();
+        } catch (err) {
+          if (err.code === 'NoSuchKey') throw err;
+          throw new pRetry.AbortError(err);
+        }
+      },
+      {
+        maxTimeout: 10000,
+        onFailedAttempt: (err) => log.debug(`getS3Object('${Bucket}', '${Key}') failed with ${err.retriesLeft} retries left: ${err.message}`),
+        ...retryOptions
+      }
+    )
 );
 
 exports.getS3ObjectReadStream = (bucket, key) => exports.s3().getObject(
@@ -839,32 +857,37 @@ async function createQueue(queueName) {
 exports.createQueue = createQueue;
 
 /**
- * Publish a message to an SNS topic.
- *
- * Catch any thrown errors and log them.
+ * Publish a message to an SNS topic. Does not catch
+ * errors, to allow more specific handling by the caller.
  *
  * @param {string} snsTopicArn - SNS topic ARN
  * @param {Object} message - Message object
- * @returns {Promise}
+ * @param {Object} retryOptions - options to control retry behavior when publishing
+ * a message fails. See https://github.com/tim-kos/node-retry#retryoperationoptions
+ * @returns {Promise<undefined>}
  */
 exports.publishSnsMessage = async (
   snsTopicArn,
-  message
-) => {
-  try {
-    if (!snsTopicArn) {
-      throw new Error('Missing SNS topic ARN');
-    }
+  message,
+  retryOptions = {}
+) =>
+  pRetry(
+    async () => {
+      if (!snsTopicArn) {
+        throw new pRetry.AbortError('Missing SNS topic ARN');
+      }
 
-    await exports.sns().publish({
-      TopicArn: snsTopicArn,
-      Message: JSON.stringify(message)
-    }).promise();
-  } catch (err) {
-    log.error(`Failed to post message to SNS topic: ${snsTopicArn}`, err);
-    log.info('Undelivered message', message);
-  }
-};
+      await exports.sns().publish({
+        TopicArn: snsTopicArn,
+        Message: JSON.stringify(message)
+      }).promise();
+    },
+    {
+      maxTimeout: 5000,
+      onFailedAttempt: (err) => log.debug(`publishSnsMessage('${snsTopicArn}', '${message}') failed with ${err.retriesLeft} retries left: ${err.message}`),
+      ...retryOptions
+    }
+  );
 
 /**
 * Send a message to AWS SQS
@@ -984,15 +1007,17 @@ exports.isThrottlingException = (err) => err.code === 'ThrottlingException';
  * Given a Cumulus step function event, if the message is on S3, pull the full message
  * from S3 and return, otherwise return the event.
  *
- * @param {Object} incomingEvent - the Cumulus event
+ * @param {Object} event - the Cumulus event
  * @returns {Object} - the full Cumulus message
  */
-exports.pullStepFunctionEvent = async (incomingEvent) => {
-  if (!incomingEvent.replace) {
-    return incomingEvent;
-  }
-  const event = cloneDeep(incomingEvent);
-  const remoteMsgS3Object = await exports.getS3Object(event.replace.Bucket, event.replace.Key);
+exports.pullStepFunctionEvent = async (event) => {
+  if (!event.replace) return event;
+
+  const remoteMsgS3Object = await exports.getS3Object(
+    event.replace.Bucket,
+    event.replace.Key,
+    { retries: 0 }
+  );
   const remoteMsg = JSON.parse(remoteMsgS3Object.Body.toString());
 
   let returnEvent = remoteMsg;
@@ -1033,7 +1058,7 @@ exports.retryOnThrottlingException = (fn, options) =>
   (...args) =>
     pRetry(
       () => fn(...args).catch(retryIfThrottlingException),
-      options
+      { maxTimeout: 5000, ...options }
     );
 
 /**

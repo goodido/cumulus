@@ -81,7 +81,7 @@ data "aws_iam_policy_document" "lambda_processing_policy" {
       "s3:PutBucket*",
       "s3:ListBucket*",
     ]
-    resources = [for b in flatten([var.public_buckets, var.protected_buckets, var.private_buckets, var.system_bucket]) : "arn:aws:s3:::${b}"]
+    resources = [for b in local.all_bucket_names : "arn:aws:s3:::${b}"]
   }
 
   statement {
@@ -93,7 +93,7 @@ data "aws_iam_policy_document" "lambda_processing_policy" {
       "s3:DeleteObject",
       "s3:DeleteObjectVersion",
     ]
-    resources = [for b in flatten([var.public_buckets, var.protected_buckets, var.private_buckets, var.system_bucket]) : "arn:aws:s3:::${b}/*"]
+    resources = [for b in local.all_bucket_names : "arn:aws:s3:::${b}/*"]
   }
 
   statement {
@@ -101,7 +101,6 @@ data "aws_iam_policy_document" "lambda_processing_policy" {
       "dynamodb:DeleteItem",
       "dynamodb:GetItem",
       "dynamodb:PutItem",
-      "dynamodb:Query",
       "dynamodb:Scan",
       "dynamodb:UpdateItem",
       "dynamodb:BatchWriteItem",
@@ -109,6 +108,11 @@ data "aws_iam_policy_document" "lambda_processing_policy" {
       "dynamodb:DescribeContinuousBackups",
     ]
     resources = [for k, v in var.dynamo_tables : v.arn]
+  }
+
+  statement {
+    actions   = ["dynamodb:Query"]
+    resources = [for k, v in var.dynamo_tables : "${v.arn}/index/*"]
   }
 
   statement {
@@ -131,7 +135,7 @@ data "aws_iam_policy_document" "lambda_processing_policy" {
       "sqs:GetQueueUrl",
       "sqs:GetQueueAttributes",
     ]
-    resources = ["arn:aws:sqs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:${var.prefix}-*"]
+    resources = ["arn:aws:sqs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"]
   }
 }
 

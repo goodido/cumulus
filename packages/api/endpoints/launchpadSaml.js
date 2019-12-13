@@ -24,9 +24,10 @@ const parseXmlString = promisify(parseString);
  */
 const launchpadPublicCertificate = async (launchpadPublicMetadataPath) => {
   let launchpadMetatdataXML;
-  const parsed = aws.parseS3Uri(launchpadPublicMetadataPath);
+  const { Bucket, Key } = aws.parseS3Uri(launchpadPublicMetadataPath);
   try {
-    launchpadMetatdataXML = (await aws.getS3Object(parsed.Bucket, parsed.Key)).Body.toString();
+    const s3Object = await aws.getS3Object(Bucket, Key);
+    launchpadMetatdataXML = s3Object.Body.toString();
   } catch (error) {
     if (error.code === 'NoSuchKey' || error.code === 'NoSuchBucket') {
       error.message = `Cumulus could not find Launchpad public xml metadata at ${launchpadPublicMetadataPath}`;
@@ -42,6 +43,48 @@ const launchpadPublicCertificate = async (launchpadPublicMetadataPath) => {
 };
 
 /**
+ * Validates the SAML user Group includes the configured authorized User Group.
+ *
+ * @param {string} samlUserGroup -  Saml response string e.g.:
+       'cn=wrongUserGroup,ou=254886,ou=ROLES,ou=Groups,dc=nasa,dc=gov'.
+ * @param {string} authorizedGroup - Cumulus oauth user group.
+ * @returns {boolean} True if samlUserGroup includes the authorizedUserGroup.
+ */
+const authorizedUserGroup = (samlUserGroup, authorizedGroup) => {
+  const matcher = new RegExp(`cn=${authorizedGroup}`);
+  return matcher.test(samlUserGroup);
+};
+
+/**
+ * Retrieve user and session information from SAML response.
+ *
+ * @param {Object} samlResponse - Post assert object returned from SAML identity provider.
+ * @returns {Object} object containing username and accessToken retrieved from SAML response.
+ */
+const parseSamlResponse = (samlResponse) => {
+  let username;
+  let accessToken;
+  let userGroup;
+  try {
+    username = samlResponse.user.attributes.UserId[0];
+    accessToken = samlResponse.user.session_index;
+    userGroup = samlResponse.user.attributes.userGroup[0];
+  } catch (error) {
+    throw new Error(
+      `invalid SAML response received ${JSON.stringify(samlResponse)}`
+    );
+  }
+
+  if (!authorizedUserGroup(userGroup, process.env.oauth_user_group)) {
+    throw new Error(
+      `User not authorized for this application ${username} not a member of userGroup: ${process.env.oauth_user_group}`
+    );
+  }
+
+  return { username, accessToken };
+};
+
+/**
  * Store the SAML response's token in the AccessResponse table and return a JWT
  * from the derived values.
  *
@@ -50,15 +93,7 @@ const launchpadPublicCertificate = async (launchpadPublicMetadataPath) => {
  * @returns {Promise<Object>} - a valid JWT token that can be used for authentication.
  */
 const buildLaunchpadJwt = async (samlResponse) => {
-  const {
-    user: { name_id: username, session_index: accessToken }
-  } = samlResponse;
-
-  if (!username || !accessToken) {
-    throw new Error(
-      `invalid SAML response received ${JSON.stringify(samlResponse)}`
-    );
-  }
+  const { username, accessToken } = parseSamlResponse(samlResponse);
   const expirationTime = Date.now() + 60 * 60 * 1000;
   const accessTokenModel = new AccessToken();
   await accessTokenModel.create({ accessToken, expirationTime, username });
@@ -184,7 +219,7 @@ const samlToken = async (req, res) => {
     }
   } catch (error) {
     return res.boom.expectationFailed(
-      'Could not retrieve necessary information from express request object. ' + error.message
+      `Could not retrieve necessary information from express request object. ${error.message}`
     );
   }
 

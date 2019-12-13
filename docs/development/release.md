@@ -27,10 +27,10 @@ Lerna handles the process of deciding which version number should be used as lon
 To update Cumulus's version number run:
 
 ```bash
-  $ npm run update
+  npm run update
 ```
 
-![](https://static.notion-static.com/13acbe0a-c59d-4c42-90eb-23d4ec65c9db/Screen_Shot_2018-03-15_at_12.21.16_PM.png)
+![Screenshot of terminal showing interactive prompt from Lerna for selecting the new release version](https://static.notion-static.com/13acbe0a-c59d-4c42-90eb-23d4ec65c9db/Screen_Shot_2018-03-15_at_12.21.16_PM.png)
 
 Lerna will handle updating the packages and all of the dependent package version numbers. If a dependency has not been changed with the update, however, lerna will not update the version of the dependency.
 
@@ -66,21 +66,23 @@ Note: This is for 1.10.3 or later.
 Create a PR against the minor version branch. Verify that the Bamboo build for the PR succeeds and then merge to the minor version branch.
 
 ### 7. Create a git tag for the release
+
 Create and push a new git tag:
 
 ```bash
-  $ git tag -a v1.x.x -m "Release 1.x.x"
-  $ git push origin v1.x.x
+  git tag -a v1.x.x -m "Release 1.x.x"
+  git push origin v1.x.x
 ```
+
 ### 8. Running the deployment
 
 Publishing of new releases is handled by a Bamboo release plan and is manually triggered.
 
 If you created a new release plan in step one, you will need to create a new bamboo deployment plan
 
-#### Creating a Bamboo Deployment plan:
+#### Creating a Bamboo Deployment plan
 
-* In the Cumulus Core project (https://ci.earthdata.nasa.gov/browse/CUM-CBA), click Actions -> Configure Plan
+* In the Cumulus Core project (<https://ci.earthdata.nasa.gov/browse/CUM-CBA>), click Actions -> Configure Plan
 
 * Scroll to the bottom of the branch list and click `Create Plan Branch`
 
@@ -98,21 +100,15 @@ Bamboo will build and run lint, audit and unit tests against that tagged release
 
 ### 9. Create a new Cumulus release on github
 
-The Cumulus Distribution Terraform module can be created by running:
+The CI release scripts will automatically create a release based on the release version tag, as well as uploading release artifacts to the Github release for the Terraform modules provided by Cumulus. The Terraform release artifacts include:
 
-```bash
-$ (cd tf-modules/distribution && ./bin/build-tf-module.sh)
-```
+* A multi-module Terraform `.zip` artifact containing filtered copies of the `tf-modules`, `packages`, and `tasks` directories for use as Terraform module sources.
+* A S3 replicator module
+* A workflow module
+* A distribution API module
+* An ECS service module
 
-This will generate a file called
-`tf-modules/distribution/dist/terraform-aws-cumulus-distribution.zip`, which
-should be uploaded as an asset of the Github release.
-
-Similarily, the S3 Replicator Terraform module can be created by running:
-
-```bash
-$ (cd tf-modules/s3-replicator && ./bin/build-tf-module.sh)
-```
+Just make sure to verify the appropriate .zip files are present on Github after the release process is complete.
 
 ## Troubleshooting
 
@@ -121,6 +117,6 @@ $ (cd tf-modules/s3-replicator && ./bin/build-tf-module.sh)
 To delete a published tag to re-tag, follow these steps:
 
 ```bash
-  $ git tag -d v1.x.x
-  $ git push -d origin v1.x.x
+  git tag -d v1.x.x
+  git push -d origin v1.x.x
 ```

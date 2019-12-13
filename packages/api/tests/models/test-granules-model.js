@@ -10,6 +10,7 @@ const ingestAws = require('@cumulus/ingest/aws');
 const launchpad = require('@cumulus/common/launchpad');
 const StepFunctions = require('@cumulus/common/StepFunctions');
 const { randomString } = require('@cumulus/common/test-utils');
+const workflows = require('@cumulus/common/workflows');
 const { removeNilProperties } = require('@cumulus/common/util');
 const cmrjs = require('@cumulus/cmrjs');
 const { CMR } = require('@cumulus/cmr-client');
@@ -934,7 +935,6 @@ test(
 
     const cumulusMessage = cloneDeep(t.context.cumulusMessage);
     delete cumulusMessage.payload.granules;
-    delete cumulusMessage.meta.input_granules;
 
     const result = await granuleModel.createGranulesFromSns(cumulusMessage);
 
@@ -980,6 +980,8 @@ test.serial(
     };
     const fileExists = async () => true;
     const fileExistsStub = sinon.stub(aws, 'fileExists').callsFake(fileExists);
+    const templateStub = sinon.stub(workflows, 'getWorkflowTemplate').callsFake(() => ({}));
+    const wfStub = sinon.stub(workflows, 'getWorkflowFile').callsFake(() => ({}));
     const invokeStub = sinon.stub(ingestAws, 'invoke');
 
     try {
@@ -989,6 +991,8 @@ test.serial(
       t.is(invokeLambdaPayload.queueName, queueName);
     } finally {
       fileExistsStub.restore();
+      templateStub.restore();
+      wfStub.restore();
       invokeStub.restore();
       updateStatusStub.restore();
     }
