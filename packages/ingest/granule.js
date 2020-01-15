@@ -3,7 +3,17 @@
 const get = require('lodash.get');
 const moment = require('moment');
 const encodeurl = require('encodeurl');
-const { aws, log, errors } = require('@cumulus/common');
+const {
+  s3CopyObject,
+  deleteS3Object,
+  calculateS3ObjectChecksum,
+  parseS3Uri,
+  headObject,
+  s3ObjectExists,
+  listS3ObjectsV2
+} = require('@cumulus/aws-client/S3');
+const log = require('@cumulus/common/log');
+const errors = require('@cumulus/errors');
 
 /**
 * Copy granule file from one s3 bucket & keypath to another
@@ -27,7 +37,7 @@ function copyGranuleFile(source, target, options) {
     Key: target.Key
   }, (options || {}));
 
-  return aws.s3CopyObject(params)
+  return s3CopyObject(params)
     .catch((error) => {
       log.error(`Failed to copy s3://${CopySource} to s3://${target.Bucket}/${target.Key}: ${error.message}`);
       throw error;
@@ -49,7 +59,7 @@ function copyGranuleFile(source, target, options) {
 **/
 async function moveGranuleFile(source, target, options) {
   await copyGranuleFile(source, target, options);
-  return aws.deleteS3Object(source.Bucket, source.Key);
+  return deleteS3Object(source.Bucket, source.Key);
 }
 
 /**
@@ -73,17 +83,17 @@ async function moveGranuleFile(source, target, options) {
 async function moveGranuleFileWithVersioning(source, target, sourceChecksumObject, copyOptions) {
   const { checksumType, checksum } = sourceChecksumObject;
   // compare the checksum of the existing file and new file, and handle them accordingly
-  const targetFileSum = await aws.calculateS3ObjectChecksum(
+  const targetFileSum = await calculateS3ObjectChecksum(
     { algorithm: (checksumType || 'CKSUM'), bucket: target.Bucket, key: target.Key }
   );
-  const sourceFileSum = checksum || await aws.calculateS3ObjectChecksum(
+  const sourceFileSum = checksum || await calculateS3ObjectChecksum(
     { algorithm: 'CKSUM', bucket: source.Bucket, key: source.Key }
   );
 
   // if the checksum of the existing file is the same as the new one, keep the existing file,
   // else rename the existing file, and both files are part of the granule.
   if (targetFileSum === sourceFileSum) {
-    await aws.deleteS3Object(source.Bucket, source.Key);
+    await deleteS3Object(source.Bucket, source.Key);
   } else {
     log.debug(`Renaming ${target.Key}...`);
     await exports.renameS3FileWithTimestamp(target.Bucket, target.Key);
@@ -187,7 +197,7 @@ function generateMoveFileParams(sourceFiles, destinations) {
         Key: file.key
       };
     } else if (file.filename) {
-      source = aws.parseS3Uri(file.filename);
+      source = parseS3Uri(file.filename);
     } else {
       throw new Error(`Unable to determine location of file: ${JSON.stringify(file)}`);
     }
@@ -245,7 +255,7 @@ async function moveGranuleFiles(sourceFiles, destinations) {
       fileBucket = file.bucket;
       fileKey = file.key;
     } else if (file.filename) {
-      const parsed = aws.parseS3Uri(file.filename);
+      const parsed = parseS3Uri(file.filename);
       fileBucket = parsed.Bucket;
       fileKey = parsed.Key;
     } else {
@@ -273,12 +283,12 @@ async function moveGranuleFiles(sourceFiles, destinations) {
   */
 async function renameS3FileWithTimestamp(bucket, key) {
   const formatString = 'YYYYMMDDTHHmmssSSS';
-  const timestamp = (await aws.headObject(bucket, key)).LastModified;
+  const timestamp = (await headObject(bucket, key)).LastModified;
   let renamedKey = `${key}.v${moment.utc(timestamp).format(formatString)}`;
 
   // if the renamed file already exists, get a new name
   // eslint-disable-next-line no-await-in-loop
-  while (await aws.s3ObjectExists({ Bucket: bucket, Key: renamedKey })) {
+  while (await s3ObjectExists({ Bucket: bucket, Key: renamedKey })) {
     renamedKey = `${key}.v${moment.utc(timestamp).add(1, 'milliseconds').format(formatString)}`;
   }
 
@@ -296,7 +306,7 @@ async function renameS3FileWithTimestamp(bucket, key) {
   * @returns {Array<Object>} returns renamed files
   */
 async function getRenamedS3File(bucket, key) {
-  const s3list = await aws.listS3ObjectsV2({ Bucket: bucket, Prefix: `${key}.v` });
+  const s3list = await listS3ObjectsV2({ Bucket: bucket, Prefix: `${key}.v` });
   return s3list.map((c) => ({ Bucket: bucket, Key: c.Key, size: c.Size }));
 }
 
