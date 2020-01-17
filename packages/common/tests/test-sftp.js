@@ -1,6 +1,6 @@
 'use strict';
 
-const fs = require('fs');
+const fs = require('fs-extra');
 const os = require('os');
 const path = require('path');
 const test = require('ava');
@@ -9,49 +9,160 @@ const { generateChecksumFromStream } = require('@cumulus/checksum');
 const {
   calculateS3ObjectChecksum,
   fileExists,
+  kms,
   recursivelyDeleteS3Bucket,
   s3,
+  s3PutFile,
   s3PutObject,
   headObject
 } = require('../aws');
 
-const {
-  randomString
-} = require('../test-utils');
+const KMS = require('../aws-client-KMS');
+const { S3KeyPairProvider } = require('../key-pair-provider');
+const { randomString } = require('../test-utils');
 const { Sftp } = require('../sftp');
 
+const encryptedPrivateKey = 'encrypted_ssh_client_rsa_key';
 const privateKey = 'ssh_client_rsa_key';
-const bucket = randomString();
-const stackName = randomString();
-
-process.env.system_bucket = bucket;
-process.env.stackName = stackName;
 
 const sftpConfig = {
   host: '127.0.0.1',
   port: '2222',
   username: 'user',
   encrypted: false,
-  privateKey: privateKey
+  privateKey
 };
 
 test.before(async () => {
-  // let's copy the key to s3
-  await s3().createBucket({ Bucket: bucket }).promise();
+  const createKeyResponse = await kms().createKey({}).promise();
+  process.env.providersKeyId = createKeyResponse.KeyMetadata.KeyId;
 
-  const privKey = fs.readFileSync(`../test-data/keys/${privateKey}`, 'utf-8');
+  process.env.stackName = randomString();
 
+  process.env.system_bucket = randomString();
+  await s3().createBucket({ Bucket: process.env.system_bucket }).promise();
+
+  // Upload the S3KeyPairProvider public key to S3
+  await s3PutFile(
+    process.env.system_bucket,
+    `${process.env.stackName}/crypto/public.pub`,
+    path.join(__dirname, 'fixtures', 'public.pub')
+  );
+
+  // Upload the S3KeyPairProvider private key to S3
+  await s3PutFile(
+    process.env.system_bucket,
+    `${process.env.stackName}/crypto/private.pem`,
+    path.join(__dirname, 'fixtures', 'private.pem')
+  );
+
+  const privateKeyPath = path.join('..', 'test-data', 'keys', privateKey);
+
+  // Upload the unencrypted SFTP private key to S3
+  await s3PutFile(
+    process.env.system_bucket,
+    `${process.env.stackName}/crypto/${privateKey}`,
+    privateKeyPath
+  );
+
+  // Upload the encrypted SFTP private key to S3
   await s3PutObject({
-    Bucket: bucket,
-    Key: `${stackName}/crypto/${privateKey}`,
-    Body: privKey
+    Bucket: process.env.system_bucket,
+    Key: `${process.env.stackName}/crypto/${encryptedPrivateKey}`,
+    Body: await KMS.encrypt(
+      process.env.providersKeyId,
+      await fs.readFile(privateKeyPath, 'utf8')
+    )
   });
 });
 
-test.after.always(async () => {
-  await Promise.all([
-    recursivelyDeleteS3Bucket(bucket)
-  ]);
+test.after.always(() => recursivelyDeleteS3Bucket(process.env.system_bucket));
+
+test('connect() succeeds with an unencrypted username and password', async (t) => {
+  const testSftpClient = new Sftp({
+    host: '127.0.0.1',
+    port: '2222',
+    encrypted: false,
+    username: 'user',
+    password: 'password'
+  });
+
+  await testSftpClient.connect();
+
+  const list = await testSftpClient.list('/');
+  t.is(list.length > 0, true);
+
+  await testSftpClient.end();
+});
+
+test('connect() succeeds with an S3KeyPairProvider-encrypted username and password', async (t) => {
+  const testSftpClient = new Sftp({
+    host: '127.0.0.1',
+    port: '2222',
+    encrypted: true,
+    username: await S3KeyPairProvider.encrypt('user'),
+    password: await S3KeyPairProvider.encrypt('password')
+  });
+
+  await testSftpClient.connect();
+
+  const list = await testSftpClient.list('/');
+  t.is(list.length > 0, true);
+
+  await testSftpClient.end();
+});
+
+test('connect() succeeds with an KMS-encrypted username and password', async (t) => {
+  const testSftpClient = new Sftp({
+    host: '127.0.0.1',
+    port: '2222',
+    encrypted: true,
+    username: await KMS.encrypt(process.env.providersKeyId, 'user'),
+    password: await KMS.encrypt(process.env.providersKeyId, 'password')
+  });
+
+  await testSftpClient.connect();
+
+  const list = await testSftpClient.list('/');
+  t.is(list.length > 0, true);
+
+  await testSftpClient.end();
+});
+
+test('connect() succeeds with an unencrypted private key', async (t) => {
+  const testSftpClient = new Sftp({
+    host: '127.0.0.1',
+    port: '2222',
+    encrypted: true,
+    username: await KMS.encrypt(process.env.providersKeyId, 'user'),
+    cmKeyId: undefined,
+    privateKey
+  });
+
+  await testSftpClient.connect();
+
+  const list = await testSftpClient.list('/');
+  t.is(list.length > 0, true);
+
+  await testSftpClient.end();
+});
+
+test.only('connect() succeeds with an encrypted private key', async (t) => {
+  const testSftpClient = new Sftp({
+    host: '127.0.0.1',
+    port: '2222',
+    encrypted: true,
+    username: await KMS.encrypt(process.env.providersKeyId, 'user'),
+    cmKeyId: process.env.providersKeyId,
+    privateKey: encryptedPrivateKey
+  });
+
+  await testSftpClient.connect();
+
+  const list = await testSftpClient.list('/');
+  t.is(list.length > 0, true);
+
+  await testSftpClient.end();
 });
 
 test('connect and retrieve list of files', async (t) => {
@@ -82,23 +193,23 @@ test('Transfer remote file to s3 with correct content-type', async (t) => {
 
   const key = `${randomString()}.hdf`;
   await testSftpClient.syncToS3(
-    '/granules/MOD09GQ.A2017224.h27v08.006.2017227165029.hdf', bucket, key
+    '/granules/MOD09GQ.A2017224.h27v08.006.2017227165029.hdf', process.env.system_bucket, key
   );
-  t.truthy(fileExists(bucket, key));
-  const sum = await calculateS3ObjectChecksum({ algorithm: 'CKSUM', bucket, key });
+  t.truthy(fileExists(process.env.system_bucket, key));
+  const sum = await calculateS3ObjectChecksum({ algorithm: 'CKSUM', bucket: process.env.system_bucket, key });
   t.is(sum, 1435712144);
 
-  const s3HeadResponse = await headObject(bucket, key);
+  const s3HeadResponse = await headObject(process.env.system_bucket, key);
   t.is(expectedContentType, s3HeadResponse.ContentType);
   await testSftpClient.end();
 });
 
 test('Upload file from s3 to remote', async (t) => {
-  const s3object = { Bucket: bucket, Key: 'delete-me-test-sftp-uploads3.txt' };
+  const s3object = { Bucket: process.env.system_bucket, Key: 'delete-me-test-sftp-uploads3.txt' };
   await s3PutObject({ Body: randomString(), ...s3object });
   const testSftpClient = new Sftp(sftpConfig);
   await testSftpClient.syncFromS3(s3object, `/granules/${s3object.Key}`);
-  const s3sum = await calculateS3ObjectChecksum({ algorithm: 'CKSUM', bucket, key: s3object.Key });
+  const s3sum = await calculateS3ObjectChecksum({ algorithm: 'CKSUM', bucket: process.env.system_bucket, key: s3object.Key });
   const filesum = await generateChecksumFromStream('CKSUM', fs.createReadStream(`../test-data/granules/${s3object.Key}`));
   t.is(s3sum, filesum);
   await testSftpClient.end();

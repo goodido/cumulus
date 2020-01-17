@@ -1,9 +1,9 @@
 'use strict';
 
 const isIp = require('is-ip');
-const { DefaultProvider } = require('@cumulus/common/key-pair-provider');
-const { isNil } = require('@cumulus/common/util');
-const { isValidHostname } = require('@cumulus/common/string');
+const { encrypt } = require('@cumulus/common/aws-client-KMS');
+const { isNil, removeNilProperties } = require('@cumulus/common/util');
+const { isNonEmptyString, isValidHostname } = require('@cumulus/common/string');
 
 const Manager = require('./base');
 const providerSchema = require('./schemas').provider;
@@ -51,50 +51,46 @@ class Provider extends Manager {
    * @param {string} id - provider id
    * @returns {boolean}
    */
-  async exists(id) {
+  exists(id) {
     return super.exists({ id });
   }
 
-  encrypt(value) {
-    return DefaultProvider.encrypt(value);
+  async update(key, provider, keysToDelete = []) {
+    const encryptedUsername = isNonEmptyString(provider.username)
+      ? await encrypt(process.env.providersKeyId, provider.username)
+      : null;
+
+    const encryptedPassword = isNonEmptyString(provider.password)
+      ? await encrypt(process.env.providersKeyId, provider.password)
+      : null;
+
+    return super.update(
+      key,
+      removeNilProperties({
+        ...provider,
+        username: encryptedUsername,
+        password: encryptedPassword
+      }),
+      keysToDelete
+    );
   }
 
-  decrypt(value) {
-    return DefaultProvider.decrypt(value);
-  }
+  async create(provider) {
+    const username = isNonEmptyString(provider.username)
+      ? await encrypt(process.env.providersKeyId, provider.username)
+      : null;
 
-  async update(key, _item, keysToDelete = []) {
-    const item = _item;
-    // encrypt the password
-    if (item.password) {
-      item.password = await this.encrypt(item.password);
-      item.encrypted = true;
-    }
+    const password = isNonEmptyString(provider.password)
+      ? await encrypt(process.env.providersKeyId, provider.password)
+      : null;
 
-    if (item.username) {
-      item.username = await this.encrypt(item.username);
-      item.encrypted = true;
-    }
+    const record = removeNilProperties({
+      ...provider,
+      username,
+      password
+    });
 
-
-    return super.update(key, item, keysToDelete);
-  }
-
-  async create(_item) {
-    const item = _item;
-
-    // encrypt the password
-    if (item.password) {
-      item.password = await this.encrypt(item.password);
-      item.encrypted = true;
-    }
-
-    if (item.username) {
-      item.username = await this.encrypt(item.username);
-      item.encrypted = true;
-    }
-
-    return super.create(item);
+    return super.create(record);
   }
 
   /**

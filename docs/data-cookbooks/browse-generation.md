@@ -230,7 +230,6 @@ You should expect to see output similar to the following truncated example:
 ```bash
 
 $ terraform apply
-module.cumulus.module.archive.null_resource.rsa_keys: Refreshing state... [id=xxxxxxxxx]
 data.terraform_remote_state.data_persistence: Refreshing state...
 module.cumulus.module.archive.aws_cloudwatch_event_rule.daily_execution_payload_cleanup: Refreshing state... [id=xxxx]
 

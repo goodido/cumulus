@@ -213,18 +213,14 @@ function fakeCollectionFactory(options = {}) {
  * @param {Object} options - properties to set on the provider
  * @returns {Object} fake provider object
  */
-function fakeProviderFactory(options = {}) {
-  return Object.assign(
-    {
-      id: randomString(),
-      globalConnectionLimit: 1,
-      protocol: 'http',
-      host: randomString(),
-      port: 80
-    },
-    options
-  );
-}
+const fakeProviderFactory = (options = {}) => ({
+  id: randomString(),
+  globalConnectionLimit: 1,
+  protocol: 'http',
+  host: randomString(),
+  port: 80,
+  ...options
+});
 
 function fakeAccessTokenFactory(params = {}) {
   return {

@@ -9,7 +9,16 @@ const {
   buildS3Uri, getS3Object, getS3ObjectReadStream, promiseS3Upload, s3ObjectExists
 } = require('./aws');
 
-const { KMSProvider: KMS, DefaultProvider } = require('./key-pair-provider');
+const KMS = require('./aws-client-KMS');
+const { S3KeyPairProvider } = require('./key-pair-provider');
+
+const decrypt = async (ciphertext) => {
+  try {
+    return await KMS.decryptBase64String(ciphertext);
+  } catch (err) {
+    return S3KeyPairProvider.decrypt(ciphertext);
+  }
+};
 
 class Sftp {
   constructor(config) {
@@ -37,11 +46,11 @@ class Sftp {
   async connect() {
     if (!this.decrypted && this.encrypted) {
       if (this.password) {
-        this.options.password = await DefaultProvider.decrypt(this.password);
+        this.options.password = await decrypt(this.password);
       }
 
       if (this.username) {
-        this.options.username = await DefaultProvider.decrypt(this.username);
+        this.options.username = await decrypt(this.username);
       }
       this.decrypted = true;
     }
@@ -62,7 +71,7 @@ class Sftp {
 
       if (this.options.cmKeyId) {
         // we are using AWS KMS and the privateKey is encrypted
-        this.options.privateKey = await KMS.decrypt(priv.Body.toString());
+        this.options.privateKey = await KMS.decryptBase64String(priv.Body.toString());
       } else {
         // private key is not encrypted...
         this.options.privateKey = priv.Body.toString();

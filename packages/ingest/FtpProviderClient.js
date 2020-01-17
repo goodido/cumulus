@@ -4,10 +4,19 @@ const JSFtp = require('jsftp');
 const { PassThrough } = require('stream');
 const { log, aws: { buildS3Uri, promiseS3Upload } } = require('@cumulus/common');
 const omit = require('lodash.omit');
-
+const KMS = require('@cumulus/common/aws-client-KMS');
 const { DefaultProvider } = require('@cumulus/common/key-pair-provider');
 const { lookupMimeType } = require('./util');
 const recursion = require('./recursion');
+
+const decrypt = async (ciphertext) => {
+  try {
+    return await KMS.decryptBase64String(ciphertext);
+  } catch (err) {
+    log.info('KMS decryption failed, falling back to S3KeyPairProvider');
+    return DefaultProvider.decrypt(ciphertext);
+  }
+};
 
 class FtpProviderClient {
   // jsftp.ls is called in _list and uses 'STAT' as a default. Some FTP
@@ -37,14 +46,14 @@ class FtpProviderClient {
   async decrypt() {
     if (!this.decrypted && this.encrypted) {
       if (this.password) {
-        this.ftpClientOptions.pass = await DefaultProvider.decrypt(this.password);
-        this.decrypted = true;
+        this.ftpClientOptions.pass = await decrypt(this.password);
       }
 
       if (this.username) {
-        this.ftpClientOptions.user = await DefaultProvider.decrypt(this.username);
-        this.decrypted = true;
+        this.ftpClientOptions.user = await decrypt(this.username);
       }
+
+      this.decrypted = true;
     }
   }
 

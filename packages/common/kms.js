@@ -1,43 +1,35 @@
 'use strict';
 
-const AWS = require('aws-sdk');
+const { encrypt, decryptBase64String } = require('./aws-client-KMS');
 
-const errors = require('./errors');
-
-const KMSDecryptionFailed = errors.createErrorType('KMSDecryptionFailed');
+class KMSDecryptionFailed extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'KMSDecryptionFailed';
+  }
+}
 
 class KMS {
-  static async encrypt(text, kmsId) {
-    const params = {
-      KeyId: kmsId,
-      Plaintext: text
-    };
-
-    const kms = new AWS.KMS();
-    const r = await kms.encrypt(params).promise();
-    return r.CiphertextBlob.toString('base64');
+  static encrypt(text, kmsId) {
+    return encrypt(kmsId, text);
   }
 
   static async decrypt(text) {
-    const params = {
-      CiphertextBlob: Buffer.from(text, 'base64')
-    };
-
-    const kms = new AWS.KMS();
     try {
-      const r = await kms.decrypt(params).promise();
-      return r.Plaintext.toString();
-    } catch (e) {
-      if (e.toString().includes('InvalidCiphertextException')) {
+      return await decryptBase64String(text);
+    } catch (err) {
+      if (err.name === 'InvalidCiphertextException') {
         throw new KMSDecryptionFailed(
           'Decrypting the secure text failed. The provided text is invalid'
         );
       }
-      throw e;
+
+      throw err;
     }
   }
 }
 
 module.exports = {
-  KMS
+  KMS,
+  KMSDecryptionFailed
 };
